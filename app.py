@@ -59,7 +59,7 @@ METRIC_TW = {
 METRIC_FORMATS = {
     'PA': '{:.0f}', 'AB': '{:.0f}', 'R': '{:.0f}', 'H': '{:.0f}', 'RBI': '{:.0f}', 
     'HR': '{:.0f}', 'SB': '{:.0f}', 'BB': '{:.0f}', 'K': '{:.0f}', 'wRC+': '{:.0f}', 
-    'PC': '{:.0f}', 'SV': '{:.0f}', 'W': '{:.0f}', 'L': '{:.0f}',
+    'PC': '{:.0f}', 'SV': '{:.0f}', 'W': '{:.0f}', 'L': '{:.0f}', 'ER': '{:.0f}',
     '打數 (AB)': '{:.0f}', '安打 (H)': '{:.0f}', '全壘打 (HR)': '{:.0f}', '三振 (K)': '{:.0f}', '保送 (BB)': '{:.0f}',
     'IP': '{:.1f}', 'K%': '{:.1f}', 'BB%': '{:.1f}', 'HardHit%': '{:.1f}', 'Barrel%': '{:.1f}', 
     'Whiff%': '{:.1f}', 'Chase%': '{:.1f}', 'GB%': '{:.1f}', 'WAR': '{:.1f}', 'Avg EV': '{:.1f}',
@@ -73,13 +73,16 @@ METRIC_FORMATS = {
 }
 
 def format_metric(val, m):
-    if pd.isna(val): return "-"
+    if pd.isna(val) or val == "": return "-"
     try:
         val_float = float(val)
         fmt = METRIC_FORMATS.get(m, '{:.3f}')
         return fmt.format(val_float)
     except:
         return str(val)
+
+# 🛡️ 建立 Styler 安全格式化字典
+STYLER_FORMATS = {k: lambda x, k=k: format_metric(x, k) for k in METRIC_FORMATS.keys()}
 
 grade_keys = ['S', 'A_plus_plus', 'A_plus', 'A', 'B_plus_plus', 'B_plus', 'B', 'C', 'D', 'E', 'F']
 grade_defaults = ['#FFD700', '#FF3300', '#FF6600', '#FF9900', '#0033CC', '#0066FF', '#3399FF', '#2E8B57', '#808080', '#A9A9A9', '#555555']
@@ -187,7 +190,6 @@ def safe_float(val):
     try: return float(val)
     except: return 0.0
 
-# 🌟 全新球探總結：採用 AVG 與 ERA 取代 WAR
 def generate_scout_conclusion(prs, p_prof, p_type):
     pr_barrel = prs.get('Barrel%', 50)
     pr_hardhit = prs.get('HardHit%', 50)
@@ -670,7 +672,7 @@ def fetch_player_gamelog(player_id, p_type, year):
                     'Date': date, 'Opponent': opp, '主/客': venue_str,
                     'ERA (賽季防禦率走勢)': safe_float(stat.get('era', 0)),
                     'WHIP (賽季WHIP走勢)': safe_float(stat.get('whip', 0)),
-                    'IP': ip_str, 'IP_calc': ip_calc, 'H': int(stat.get('hits', 0)),
+                    'IP': safe_float(stat.get('inningsPitched', 0)), 'IP_calc': ip_calc, 'H': int(stat.get('hits', 0)),
                     'R': int(stat.get('runs', 0)), 'ER': int(stat.get('earnedRuns', 0)),
                     'BB': int(stat.get('baseOnBalls', 0)), 'K': int(stat.get('strikeOuts', 0)),
                     'PC': int(stat.get('numberOfPitches', 0)), 'HR': int(stat.get('homeRuns', 0)),
@@ -760,7 +762,7 @@ def fetch_recent_form_ranking(p_type):
                 ip_calc = float(ip_str.replace('.1', '.333').replace('.2', '.667')) if ip_str else 0.0
                 if ip_calc >= 10.0:
                     data.append({
-                        'Player': player_name, 'Team': team_name, 'IP': ip_calc,
+                        'Player': player_name, 'Team': team_name, 'IP': safe_float(stat.get('inningsPitched', 0)),
                         'ERA': safe_float(stat.get('era', 0)), 'WHIP': safe_float(stat.get('whip', 0)),
                         'K': stat.get('strikeOuts', 0), 'BB': stat.get('baseOnBalls', 0), 'SV': stat.get('saves', 0)
                     })
@@ -796,7 +798,7 @@ def fetch_player_home_away_splits(player_id, p_type, year):
                 ip_str = str(stat.get('inningsPitched', '0'))
                 ip_calc = float(ip_str.replace('.1', '.333').replace('.2', '.667'))
                 data.append({
-                    '場地 (Split)': venue_str, 'IP': ip_calc, 'ERA': safe_float(stat.get('era', 0)),
+                    '場地 (Split)': venue_str, 'IP': safe_float(stat.get('inningsPitched', 0)), 'ERA': safe_float(stat.get('era', 0)),
                     'WHIP': safe_float(stat.get('whip', 0)), 'K': int(stat.get('strikeOuts', 0)),
                     'BB': int(stat.get('baseOnBalls', 0)), 'HR': int(stat.get('homeRuns', 0)), 'BAA': safe_float(stat.get('avg', 0))
                 })
@@ -919,14 +921,14 @@ def fetch_milb_stats(year, sid, p_type):
                 ip_calc = float(ip_str.replace('.1', '.333').replace('.2', '.667')) if ip_str else 0.0
                 if ip_calc >= 20.0:
                     data.append({
-                        '球員 (Player)': player_name, '大聯盟母隊 (MLB Team)': mlb_team, 'IP': ip_str,
+                        '球員 (Player)': player_name, '大聯盟母隊 (MLB Team)': mlb_team, 'IP': safe_float(stat.get('inningsPitched', 0)),
                         'W': stat.get('wins', 0), 'L': stat.get('losses', 0), 'ERA': float(stat.get('era', 0) or 0),
                         'WHIP': float(stat.get('whip', 0) or 0), 'K': stat.get('strikeOuts', 0), 'BB': stat.get('baseOnBalls', 0)
                     })
         return pd.DataFrame(data)
     except: return pd.DataFrame()
 
-# 🌐 全域安全獲取 Metrics (避免 Scope 錯誤)
+# 🌐 全域安全獲取 Metrics
 exclude_cols = ['Player', 'Player_ID', 'Team', 'Position', 'PA', 'AB', 'R', 'ER', 'PC', 'IP', 'H', 'HR', 'SB', 'Diff']
 
 # --- 4. 側欄功能區 ---
@@ -991,7 +993,6 @@ with st.sidebar:
             </style>
         """, unsafe_allow_html=True)
         
-        st.markdown(f"<h3 style='color:{p_prof_secondary} !important; text-shadow: 0px 1px 3px rgba(0,0,0,0.6); margin-top: 10px; margin-bottom: 5px;'>🔍 專屬球探面版</h3>", unsafe_allow_html=True)
         st.markdown("---")
 
     with st.expander("⚙️ 系統外觀設定"):
@@ -1007,6 +1008,10 @@ if not full_data.empty:
         [data-testid="stAppViewContainer"] {{ background-color: {hex_to_rgba(p_prof_color, 0.05)} !important; transition: background-color 0.5s ease; }}
         .stApp {{ background-color: {hex_to_rgba(p_prof_color, 0.05)} !important; transition: background-color 0.5s ease; }}
         [data-testid="stHeader"] {{ background-color: transparent !important; }}
+        
+        /* 🎯 讓核心數據的數字變成球隊主色 */
+        [data-testid="stMetricValue"] {{ color: {p_prof_color} !important; text-shadow: 1px 1px 2px rgba(0,0,0,0.1); }}
+        
         [data-testid="stMetricDelta"] > div {{ font-size: 1.15rem !important; font-weight: 900 !important; }}
         [data-testid="stMetricDelta"] svg {{ width: 1.8rem !important; height: 1.8rem !important; }}
         .block-container {{ max-width: 1400px !important; margin: 0 auto !important; padding-top: 1rem !important; padding-bottom: 2rem !important; }}
@@ -1021,7 +1026,7 @@ if not full_data.empty:
     st.markdown(f"""
         <div style="text-align: center; margin-bottom: 20px;">
             <h1 style="color: {p_prof_color}; text-shadow: 1px 1px 3px rgba(0,0,0,0.15); font-weight: 900; margin: 0; padding: 0;">
-                ⚾ MLB 球探系統 ⚾
+                 MLB 球探系統 
             </h1>
             <div style="width: 120px; height: 5px; background-color: {p_prof_secondary}; margin: 10px auto; border-radius: 3px; box-shadow: 0px 1px 2px rgba(0,0,0,0.2);"></div>
         </div>
@@ -1083,7 +1088,7 @@ if not full_data.empty:
                 bg = hex_to_rgba(p_prof_color, 0.18) if is_home else hex_to_rgba(get_team_color(row['Opponent'])[0], 0.18)
                 return [f'background-color: {bg}; color: black; font-weight: 500;' for _ in row.index]
                 
-            styled_recent_5 = recent_5[show_cols].style.apply(color_gamelog_rows, axis=1).format(METRIC_FORMATS).hide(axis='index')
+            styled_recent_5 = recent_5[show_cols].style.apply(color_gamelog_rows, axis=1).format(STYLER_FORMATS).hide(axis='index')
             st.markdown(f"<div class='table-scroll-container'>{styled_recent_5.to_html()}</div>", unsafe_allow_html=True)
         else:
             st.info("⚠️ 目前查無本賽季出賽紀錄。")
@@ -1115,7 +1120,7 @@ if not full_data.empty:
         st.markdown("---")
         st.markdown("### 📊 本季單人完整進階數據表")
         single_df = full_data[full_data['Player'] == target_profile].drop(columns=['Player_ID'], errors='ignore')
-        styled_single = single_df.style.apply(lambda x: [highlight_elite_stats(v, x.name, p_type) for v in x], axis=0).format(METRIC_FORMATS).hide(axis='index')
+        styled_single = single_df.style.apply(lambda x: [highlight_elite_stats(v, x.name, p_type) for v in x], axis=0).format(STYLER_FORMATS).hide(axis='index')
         st.markdown(f"<div class='table-scroll-container' style='max-height: none;'>{styled_single.to_html()}</div>", unsafe_allow_html=True)
         
         st.markdown("---")
@@ -1123,10 +1128,7 @@ if not full_data.empty:
         with st.spinner("載入 Savant 進階對戰數據..."):
             platoon_df = fetch_savant_platoon_splits(p_prof['Player_ID'], p_type, year)
             if not platoon_df.empty:
-                styled_platoon = platoon_df.style.format({
-                    'AVG': '{:.3f}', 'OBP': '{:.3f}', 'SLG': '{:.3f}', 'OPS': '{:.3f}',
-                    'K%': '{:.1f}%', 'BB%': '{:.1f}%', 'HardHit%': '{:.1f}%', 'Barrel%': '{:.1f}%', 'Whiff%': '{:.1f}%', 'Avg EV': '{:.1f}'
-                }).hide(axis='index')
+                styled_platoon = platoon_df.style.format(STYLER_FORMATS).hide(axis='index')
                 st.markdown(f"<div class='table-scroll-container' style='max-height: none;'>{styled_platoon.to_html()}</div>", unsafe_allow_html=True)
             else:
                 st.info("⚠️ 查無本季 Savant 進階對戰左右手數據。")
@@ -1136,7 +1138,7 @@ if not full_data.empty:
         with st.spinner("載入主客場數據..."):
             ha_df = fetch_player_home_away_splits(p_prof['Player_ID'], p_type, year)
             if not ha_df.empty:
-                styled_ha = ha_df.style.format(METRIC_FORMATS).hide(axis='index')
+                styled_ha = ha_df.style.format(STYLER_FORMATS).hide(axis='index')
                 st.markdown(f"<div class='table-scroll-container' style='max-height: none;'>{styled_ha.to_html()}</div>", unsafe_allow_html=True)
             else:
                 st.info("⚠️ 查無本季主客場數據。")
@@ -1169,17 +1171,27 @@ if not full_data.empty:
             if not ts_df.empty and theme_team in ts_df['Team'].values:
                 ts = ts_df[ts_df['Team'] == theme_team].iloc[0]
                 
+                def team_metric_card(label, val_str, rank):
+                    rank_color = "#00E676" if rank <= 15 else "#A9A9A9"
+                    return f'''
+                    <div style="background-color: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 15px; border: 1px solid #e0e0e0; text-align: center;">
+                        <div style="font-size: {f_size(st.session_state.font_size, 0.9)}; color: #555; margin-bottom: 5px; font-weight: bold;">{label}</div>
+                        <div style="font-size: {f_size(st.session_state.font_size, 1.8)}; font-weight: 900; color: {p_prof_color};">{val_str}</div>
+                        <div style="font-size: {f_size(st.session_state.font_size, 0.85)}; color: {rank_color}; font-weight: bold; margin-top: 5px;">聯盟第 {int(rank)} 名</div>
+                    </div>
+                    '''
+                
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("打擊率 (AVG)", f"{ts['H_AVG']:.3f}", f"聯盟第 {int(ts['H_AVG_Rank'])} 名", delta_color="off")
-                c2.metric("攻擊指數 (OPS)", f"{ts['H_OPS']:.3f}", f"聯盟第 {int(ts['H_OPS_Rank'])} 名", delta_color="off")
-                c3.metric("全壘打 (HR)", f"{int(ts['H_HR'])}", f"聯盟第 {int(ts['H_HR_Rank'])} 名", delta_color="off")
-                c4.metric("總得分 (Runs)", f"{int(ts['H_R'])}", f"聯盟第 {int(ts['H_R_Rank'])} 名", delta_color="off")
+                c1.markdown(team_metric_card("打擊率 (AVG)", f"{ts['H_AVG']:.3f}", ts['H_AVG_Rank']), unsafe_allow_html=True)
+                c2.markdown(team_metric_card("攻擊指數 (OPS)", f"{ts['H_OPS']:.3f}", ts['H_OPS_Rank']), unsafe_allow_html=True)
+                c3.markdown(team_metric_card("全壘打 (HR)", f"{int(ts['H_HR'])}", ts['H_HR_Rank']), unsafe_allow_html=True)
+                c4.markdown(team_metric_card("總得分 (Runs)", f"{int(ts['H_R'])}", ts['H_R_Rank']), unsafe_allow_html=True)
                 
                 c5, c6, c7, c8 = st.columns(4)
-                c5.metric("團隊防禦率 (ERA)", f"{ts['P_ERA']:.2f}", f"聯盟第 {int(ts['P_ERA_Rank'])} 名", delta_color="off")
-                c6.metric("每局被上壘率 (WHIP)", f"{ts['P_WHIP']:.2f}", f"聯盟第 {int(ts['P_WHIP_Rank'])} 名", delta_color="off")
-                c7.metric("團隊三振數 (K)", f"{int(ts['P_K'])}", f"聯盟第 {int(ts['P_K_Rank'])} 名", delta_color="off")
-                c8.metric("團隊保送數 (BB)", f"{int(ts['P_BB'])}", f"聯盟第 {int(ts['P_BB_Rank'])} 名", delta_color="off")
+                c5.markdown(team_metric_card("團隊防禦率 (ERA)", f"{ts['P_ERA']:.2f}", ts['P_ERA_Rank']), unsafe_allow_html=True)
+                c6.markdown(team_metric_card("每局被上壘率 (WHIP)", f"{ts['P_WHIP']:.2f}", ts['P_WHIP_Rank']), unsafe_allow_html=True)
+                c7.markdown(team_metric_card("團隊三振數 (K)", f"{int(ts['P_K'])}", ts['P_K_Rank']), unsafe_allow_html=True)
+                c8.markdown(team_metric_card("團隊保送數 (BB)", f"{int(ts['P_BB'])}", ts['P_BB_Rank']), unsafe_allow_html=True)
             else:
                 st.info("⚠️ 尚無本賽季團隊數據。")
                 
@@ -1191,7 +1203,13 @@ if not full_data.empty:
                 def style_wl(val):
                     color = '#4CAF50' if val == 'W' else '#F44336'
                     return f'color: white; background-color: {color}; font-weight: bold; text-align: center;'
-                styled_recent = recent_games_df.style.map(lambda x: style_wl(x) if x in ['W', 'L'] else '', subset=['勝負 (Result)']).hide(axis='index')
+                def style_opp(val):
+                    c = get_team_color(val)[0]
+                    return f'color: {c} !important; font-weight: 900 !important;'
+                    
+                styled_recent = recent_games_df.style.map(lambda x: style_wl(x) if x in ['W', 'L'] else '', subset=['勝負 (Result)'])\
+                                                     .map(style_opp, subset=['對手 (Opponent)'])\
+                                                     .hide(axis='index')
                 st.markdown(f"<div class='table-scroll-container'>{styled_recent.to_html()}</div>", unsafe_allow_html=True)
             else:
                 st.info("⚠️ 尚無近況賽事資料。")
@@ -1201,12 +1219,15 @@ if not full_data.empty:
         with st.spinner("載入大聯盟名單與本季精確守位..."):
             roster_df = fetch_team_roster(MLB_TEAM_IDS.get(theme_team), year)
             if not roster_df.empty:
-                styled_roster = roster_df.style.hide(axis='index')
+                styled_roster = roster_df.style.map(lambda _: f'color: {p_prof_color} !important; font-weight: 700 !important;').hide(axis='index')
                 st.markdown(f"<div class='table-scroll-container' style='max-height: 800px;'>{styled_roster.to_html()}</div>", unsafe_allow_html=True)
             else:
                 st.warning("⚠️ 無法載入球員名單。")
 
     else:
+        # ==========================================
+        # 📌 模式 C：全聯盟綜合分析主頁
+        # ==========================================
         data = full_data.copy()
         
         scores = [round(sum(get_relative_grade(data, m, row[m], p_type)[1] for m in global_metrics)/len(global_metrics), 3) for _, row in data.iterrows()]
@@ -1238,7 +1259,7 @@ if not full_data.empty:
             sorted_data = data.sort_values(by=sort_metric, ascending=asc).reset_index(drop=True)
             sorted_data['同池排名'] = sorted_data.index + 1
             
-            styled_df = sorted_data.drop(columns=['Player_ID'], errors='ignore').style.apply(lambda x: [highlight_elite_stats(v, x.name, p_type) for v in x], axis=0).map(style_grade, subset=['綜合評級']).format(METRIC_FORMATS).hide(axis='index')
+            styled_df = sorted_data.drop(columns=['Player_ID'], errors='ignore').style.apply(lambda x: [highlight_elite_stats(v, x.name, p_type) for v in x], axis=0).map(style_grade, subset=['綜合評級']).format(STYLER_FORMATS).hide(axis='index')
             st.markdown(f"<div class='table-scroll-container'>{styled_df.to_html()}</div>", unsafe_allow_html=True)
             
         with tab_recent:
@@ -1261,7 +1282,7 @@ if not full_data.empty:
                     recent_df = recent_df.sort_values(by=sel_recent_m, ascending=asc_order).reset_index(drop=True)
                     recent_df.index += 1
                     
-                    styled_recent = recent_df.style.format(METRIC_FORMATS).background_gradient(subset=[sel_recent_m], cmap=cmap).hide(axis='index')
+                    styled_recent = recent_df.style.format(STYLER_FORMATS).background_gradient(subset=[sel_recent_m], cmap=cmap).hide(axis='index')
                     st.markdown(f"<div class='table-scroll-container'>{styled_recent.to_html()}</div>", unsafe_allow_html=True)
                 else:
                     st.warning("⚠️ 目前抓取不到近況數據，可能為休賽季或 API 延遲。")
@@ -1520,7 +1541,7 @@ if not full_data.empty:
                     st.markdown("---")
                     st.markdown(f"<h3 style='color:{home_t_color}'>⚔️ 上半局：{away_t} (客隊打線) VS {home_p} (主隊先發)</h3>", unsafe_allow_html=True)
                     if not hp_stats.empty:
-                        st.markdown(f"<div class='table-scroll-container'>{hp_stats.drop(columns=['Player_ID']).style.format(METRIC_FORMATS).hide(axis='index').to_html()}</div>", unsafe_allow_html=True)
+                        st.markdown(f"<div class='table-scroll-container'>{hp_stats.drop(columns=['Player_ID']).style.format(STYLER_FORMATS).hide(axis='index').to_html()}</div>", unsafe_allow_html=True)
                     else: st.warning(f"查無主隊先發 {home_p} 的本季數據")
                         
                     ah_stats = ah_stats.sort_values(by='OPS', ascending=False)
@@ -1528,15 +1549,15 @@ if not full_data.empty:
                         bvp_df = fetch_bvp_data(home_p_id, ah_stats['Player_ID'].tolist())
                         if not bvp_df.empty:
                             st.markdown(f"<div style='font-size:{f_size(st.session_state.font_size, 1.5)}; font-weight:bold; margin-top:10px; margin-bottom:10px;'>🔥 生涯對戰紀錄 (BvP)</div>", unsafe_allow_html=True)
-                            st.markdown(f"<div class='table-scroll-container'>{bvp_df.style.format(METRIC_FORMATS).hide(axis='index').to_html()}</div>", unsafe_allow_html=True)
+                            st.markdown(f"<div class='table-scroll-container'>{bvp_df.style.format(STYLER_FORMATS).hide(axis='index').to_html()}</div>", unsafe_allow_html=True)
                     if not ah_stats.empty:
                         st.markdown(f"<div style='font-size:{f_size(st.session_state.font_size, 1.5)}; font-weight:bold; margin-top:10px; margin-bottom:10px;'>**客隊打線本季表現**</div>", unsafe_allow_html=True)
-                        st.markdown(f"<div class='table-scroll-container'>{ah_stats.drop(columns=['Player_ID']).style.format(METRIC_FORMATS).hide(axis='index').to_html()}</div>", unsafe_allow_html=True)
+                        st.markdown(f"<div class='table-scroll-container'>{ah_stats.drop(columns=['Player_ID']).style.format(STYLER_FORMATS).hide(axis='index').to_html()}</div>", unsafe_allow_html=True)
                     
                     st.divider()
                     st.markdown(f"<h3 style='color:{away_t_color}'>⚔️ 下半局：{home_t} (主隊打線) VS {away_p} (客隊先發)</h3>", unsafe_allow_html=True)
                     if not ap_stats.empty:
-                        st.markdown(f"<div class='table-scroll-container'>{ap_stats.drop(columns=['Player_ID']).style.format(METRIC_FORMATS).hide(axis='index').to_html()}</div>", unsafe_allow_html=True)
+                        st.markdown(f"<div class='table-scroll-container'>{ap_stats.drop(columns=['Player_ID']).style.format(STYLER_FORMATS).hide(axis='index').to_html()}</div>", unsafe_allow_html=True)
                     else: st.warning(f"查無客隊先發 {away_p} 的本季數據")
                         
                     hh_stats = hh_stats.sort_values(by='OPS', ascending=False)
@@ -1544,10 +1565,10 @@ if not full_data.empty:
                         bvp_df = fetch_bvp_data(away_p_id, hh_stats['Player_ID'].tolist())
                         if not bvp_df.empty:
                             st.markdown(f"<div style='font-size:{f_size(st.session_state.font_size, 1.5)}; font-weight:bold; margin-top:10px; margin-bottom:10px;'>🔥 生涯對戰紀錄 (BvP)</div>", unsafe_allow_html=True)
-                            st.markdown(f"<div class='table-scroll-container'>{bvp_df.style.format(METRIC_FORMATS).hide(axis='index').to_html()}</div>", unsafe_allow_html=True)
+                            st.markdown(f"<div class='table-scroll-container'>{bvp_df.style.format(STYLER_FORMATS).hide(axis='index').to_html()}</div>", unsafe_allow_html=True)
                     if not hh_stats.empty:
                         st.markdown(f"<div style='font-size:{f_size(st.session_state.font_size, 1.5)}; font-weight:bold; margin-top:10px; margin-bottom:10px;'>**主隊打線本季表現**</div>", unsafe_allow_html=True)
-                        st.markdown(f"<div class='table-scroll-container'>{hh_stats.drop(columns=['Player_ID']).style.format(METRIC_FORMATS).hide(axis='index').to_html()}</div>", unsafe_allow_html=True)
+                        st.markdown(f"<div class='table-scroll-container'>{hh_stats.drop(columns=['Player_ID']).style.format(STYLER_FORMATS).hide(axis='index').to_html()}</div>", unsafe_allow_html=True)
 
         with tab_mvp:
             st.subheader(f"👑 {year} 賽季 MVP 預測排行榜")
@@ -1564,7 +1585,7 @@ if not full_data.empty:
                         
                     mvp_top = mvp_df.sort_values('MVP_Index', ascending=False).head(15).reset_index(drop=True)
                     mvp_top.index += 1
-                    mvp_style = mvp_top[keep_cols].style.format(METRIC_FORMATS).background_gradient(subset=['MVP_Index'], cmap='YlOrRd')
+                    mvp_style = mvp_top[keep_cols].style.format(STYLER_FORMATS).background_gradient(subset=['MVP_Index'], cmap='YlOrRd')
                     st.markdown(f"<div class='table-scroll-container'>{mvp_style.to_html()}</div>", unsafe_allow_html=True)
         
         if p_type == "投手" and tab_cy is not None:
@@ -1577,7 +1598,7 @@ if not full_data.empty:
                         cy_df['Cy_Index'] = (cy_df['WAR'] * 15 + cy_df['K%'] * 1.2 - cy_df['ERA'] * 8 - cy_df['WHIP'] * 10).round(1)
                         cy_top = cy_df.sort_values('Cy_Index', ascending=False).head(15).reset_index(drop=True)
                         cy_top.index += 1
-                        cy_style = cy_top[['Player', 'Team', 'Position', 'WAR', 'ERA', 'WHIP', 'K%', 'IP', 'Cy_Index']].style.format(METRIC_FORMATS).background_gradient(subset=['Cy_Index'], cmap='Blues')
+                        cy_style = cy_top[['Player', 'Team', 'Position', 'WAR', 'ERA', 'WHIP', 'K%', 'IP', 'Cy_Index']].style.format(STYLER_FORMATS).background_gradient(subset=['Cy_Index'], cmap='Blues')
                         st.markdown(f"<div class='table-scroll-container'>{cy_style.to_html()}</div>", unsafe_allow_html=True)
 
         with tab_milb:
@@ -1616,7 +1637,7 @@ if not full_data.empty:
                     cmap = 'Greens' if p_type == '打者' else 'Blues'
                     if sel_sort in lower_is_better_milb: cmap = 'Blues_r' if p_type == '投手' else 'Greens_r'
                     
-                    milb_style = milb_df.style.format(METRIC_FORMATS).background_gradient(subset=[sel_sort], cmap=cmap)
+                    milb_style = milb_df.style.format(STYLER_FORMATS).background_gradient(subset=[sel_sort], cmap=cmap)
                     st.markdown(f"<div class='table-scroll-container'>{milb_style.to_html()}</div>", unsafe_allow_html=True)
                 else:
                     st.warning(f"⚠️ 目前查無 {year} 賽季 {milb_level} 的 {p_type} 數據。\n\n可能原因：小聯盟賽季尚未開始（通常為 4 月初），或該層級暫無符合篩選條件的球員。")
