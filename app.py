@@ -8,7 +8,7 @@ from pybaseball import statcast_batter_expected_stats, statcast_pitcher_expected
 from datetime import datetime, timedelta, timezone
 
 # 🌟 必須是第一個 Streamlit 指令
-st.set_page_config(layout="wide", page_title="MLB 終極球探系統")
+st.set_page_config(layout="wide", page_title="MLB 球探系統")
 
 # --- 0. 常數與全域設定 (真實的主色、副色) ---
 MLB_TEAM_COLORS = {
@@ -119,18 +119,6 @@ def get_team_color(team_name, default_colors=("#EF3E42", "#1E90FF")):
         colors = ("#003831", "#EFB21E")
     if not colors: colors = default_colors
     return colors
-
-def darken_color(hex_color, factor=0.7):
-    if not hex_color or not isinstance(hex_color, str) or len(hex_color) < 7: return "#000000"
-    hex_color = hex_color.lstrip('#')
-    try:
-        r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-        r = max(0, int(r * factor))
-        g = max(0, int(g * factor))
-        b = max(0, int(b * factor))
-        return f"#{r:02x}{g:02x}{b:02x}"
-    except:
-        return "#000000"
 
 def get_team_logo_url(team_name):
     if not team_name: return ""
@@ -732,14 +720,23 @@ def fetch_team_recent_form(team_id, target_date_str):
         return games[-5:] 
     except: return []
 
+# 🔥 抓取全聯盟大範圍近況並嚴格篩選 (打者>=25PA，SP>=20IP，RP/CL>=8IP)
 @st.cache_data(ttl=3600*3)
 def fetch_recent_form_ranking(p_type):
     group = 'hitting' if p_type == '打者' else 'pitching'
     tw_now = datetime.now(timezone(timedelta(hours=8)))
-    days_back = 15 if p_type == '打者' else 30
-    start_dt = tw_now - timedelta(days=days_back)
     
-    url = f"https://statsapi.mlb.com/api/v1/stats?stats=byDateRange&group={group}&startDate={start_dt.strftime('%Y-%m-%d')}&endDate={tw_now.strftime('%Y-%m-%d')}&playerPool=ALL&limit=1500"
+    if tw_now.month < 4:
+        end_dt = datetime(tw_now.year - 1, 10, 31)
+    elif tw_now.month > 10:
+        end_dt = datetime(tw_now.year, 10, 31)
+    else:
+        end_dt = tw_now
+        
+    days_back = 15 if p_type == '打者' else 30
+    start_dt = end_dt - timedelta(days=days_back)
+    
+    url = f"https://statsapi.mlb.com/api/v1/stats?stats=byDateRange&group={group}&startDate={start_dt.strftime('%Y-%m-%d')}&endDate={end_dt.strftime('%Y-%m-%d')}&playerPool=ALL&limit=1500"
     try:
         res = requests.get(url, timeout=10).json()
         splits = res.get('stats', [{}])[0].get('splits', [])
@@ -750,7 +747,7 @@ def fetch_recent_form_ranking(p_type):
             stat = s.get('stat', {})
             if p_type == '打者':
                 pa = stat.get('plateAppearances', 0)
-                if pa >= 20: 
+                if pa >= 25: 
                     data.append({
                         'Player': player_name, 'Team': team_name, 'PA': pa,
                         'AVG': safe_float(stat.get('avg', 0)), 'OBP': safe_float(stat.get('obp', 0)),
@@ -760,7 +757,12 @@ def fetch_recent_form_ranking(p_type):
             else:
                 ip_str = str(stat.get('inningsPitched', '0'))
                 ip_calc = float(ip_str.replace('.1', '.333').replace('.2', '.667')) if ip_str else 0.0
-                if ip_calc >= 10.0:
+                
+                gs = stat.get('gamesStarted', 0)
+                gp = stat.get('gamesPlayed', 0)
+                is_sp = gp > 0 and (gs > gp / 2)
+                
+                if (is_sp and ip_calc >= 20.0) or (not is_sp and ip_calc >= 8.0):
                     data.append({
                         'Player': player_name, 'Team': team_name, 'IP': safe_float(stat.get('inningsPitched', 0)),
                         'ERA': safe_float(stat.get('era', 0)), 'WHIP': safe_float(stat.get('whip', 0)),
@@ -993,8 +995,6 @@ with st.sidebar:
             </style>
         """, unsafe_allow_html=True)
         
-        st.markdown("---")
-
     with st.expander("⚙️ 系統外觀設定"):
         st.session_state.font_size = st.slider("📄 全局介面字體大小 (基準值)", min_value=12, max_value=30, value=st.session_state.font_size, step=1)
         st.session_state.table_font_size = st.slider("📊 數據表格專用字體 (基準值)", min_value=10, max_value=24, value=st.session_state.table_font_size, step=1)
@@ -1264,28 +1264,45 @@ if not full_data.empty:
             
         with tab_recent:
             st.markdown(f"### 🔥 {p_type}近況火熱排行榜")
-            st.caption(f"以 {p_type} 過去 {'15' if p_type=='打者' else '30'} 天內的實際成績計算，找出誰正處於絕佳狀態！")
-            with st.spinner("全網撈取最新戰報中..."):
+            st.caption(f"以大數據掃描近期賽事（打者近15天、投手近30天），嚴格篩選出符合門檻（打者需滿 25 打席、先發需滿 20 局、後援需滿 8 局）的球員！")
+            with st.spinner("全網大範圍撈取最新戰報中..."):
                 recent_df = fetch_recent_form_ranking(p_type)
                 if not recent_df.empty:
+                    pos_map = full_data.set_index('Player')['Position'].to_dict()
+                    recent_df.insert(2, 'Position', recent_df['Player'].map(pos_map).fillna('Unknown'))
+                    
                     if p_type == '打者':
                         recent_metrics = ['OPS', 'AVG', 'OBP', 'SLG', 'HR', 'RBI', 'PA']
-                        sel_recent_m = st.selectbox("📊 選擇近況排序指標", recent_metrics, index=0)
+                        pos_options = ["全部 (ALL)", "DH", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"]
+                    else:
+                        recent_metrics = ['ERA', 'WHIP', 'K', 'BB', 'SV', 'IP']
+                        pos_options = ["全部 (ALL)", "SP", "RP", "CL"]
+                        
+                    c_rm, c_rp = st.columns(2)
+                    sel_recent_m = c_rm.selectbox("📊 選擇近況排序指標", recent_metrics, index=0)
+                    sel_recent_pos = c_rp.selectbox("🛡️ 篩選守備位置", pos_options, index=0)
+                    
+                    if p_type == '打者':
                         cmap = 'Reds'
                         asc_order = False
                     else:
-                        recent_metrics = ['ERA', 'WHIP', 'K', 'BB', 'SV', 'IP']
-                        sel_recent_m = st.selectbox("📊 選擇近況排序指標", recent_metrics, index=0)
                         cmap = 'Blues_r' if sel_recent_m in ['ERA', 'WHIP', 'BB'] else 'Blues'
                         asc_order = True if sel_recent_m in ['ERA', 'WHIP', 'BB'] else False
+                    
+                    if sel_recent_pos != "全部 (ALL)":
+                        recent_df = recent_df[recent_df['Position'].str.contains(sel_recent_pos, na=False)]
                     
                     recent_df = recent_df.sort_values(by=sel_recent_m, ascending=asc_order).reset_index(drop=True)
                     recent_df.index += 1
                     
-                    styled_recent = recent_df.style.format(STYLER_FORMATS).background_gradient(subset=[sel_recent_m], cmap=cmap).hide(axis='index')
+                    def style_recent_cols(row):
+                        c = get_team_color(row['Team'])[0]
+                        return [f'color: {c} !important; font-weight: 900 !important;' if col in ['Player', 'Team', 'Position'] else '' for col in row.index]
+                    
+                    styled_recent = recent_df.style.apply(style_recent_cols, axis=1).format(STYLER_FORMATS).background_gradient(subset=[sel_recent_m], cmap=cmap).hide(axis='index')
                     st.markdown(f"<div class='table-scroll-container'>{styled_recent.to_html()}</div>", unsafe_allow_html=True)
                 else:
-                    st.warning("⚠️ 目前抓取不到近況數據，可能為休賽季或 API 延遲。")
+                    st.warning("⚠️ 目前抓取不到符合嚴格門檻的近況數據，可能為休賽季或尚未累積足夠場次。")
 
         with tab_radar:
             st.markdown("### 🎯 選擇雷達圖比較目標")
