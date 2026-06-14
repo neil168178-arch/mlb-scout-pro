@@ -545,10 +545,9 @@ def fetch_all_teams_stats(year):
 @st.cache_data(ttl=3600*12)
 def fetch_team_injury_list(team_id):
     tw_now = datetime.now(timezone(timedelta(hours=8)))
-    if tw_now.month < 4: query_date = f"{tw_now.year - 1}-09-30"
-    elif tw_now.month > 10: query_date = f"{tw_now.year}-09-30"
-    else: query_date = tw_now.strftime("%Y-%m-%d")
+    year = tw_now.year
     
+    # 🎯 第一步：自動找出該球隊底下所有小聯盟附屬球隊 (MiLB Affiliates)
     team_ids_to_check = [team_id]
     try:
         res_teams = requests.get("https://statsapi.mlb.com/api/v1/teams?sportIds=1,11,12,13,14", timeout=10).json()
@@ -558,44 +557,67 @@ def fetch_team_injury_list(team_id):
     except:
         pass
         
-    il_data = []
+    il_players = {}
     
+    # 🎯 第二步：針對大聯盟和小聯盟的每一個層級球隊，進行雙重掃描
     for t_id in team_ids_to_check:
-        url = f"https://statsapi.mlb.com/api/v1/teams/{t_id}/roster/all?date={query_date}&hydrate=person(injuries)"
-        try:
-            res = requests.get(url, timeout=10).json()
-            for p in res.get('roster', []):
-                status_desc = p.get('status', {}).get('description', 'Unknown')
-                
-                if any(x in status_desc for x in ['IL', 'Out', 'Day-to-Day', '7-day', '10-day', '15-day', '60-day', 'Injured']):
-                    name = p['person']['fullName']
-                    pos = p['position']['abbreviation']
+        # 使用雙管齊下：40人名單 + 完整球季名單，確保不會漏掉 60天 IL，並盡量抓取完整病歷
+        urls = [
+            f"https://statsapi.mlb.com/api/v1/teams/{t_id}/roster/40Man?hydrate=person(injuries)",
+            f"https://statsapi.mlb.com/api/v1/teams/{t_id}/roster/fullSeason?season={year}&hydrate=person(injuries)"
+        ]
+        
+        for url in urls:
+            try:
+                res = requests.get(url, timeout=10).json()
+                for p in res.get('roster', []):
+                    status_desc = p.get('status', {}).get('description', 'Unknown')
                     
-                    injuries = p['person'].get('injuries', [])
-                    
-                    if injuries:
-                        latest_injury = injuries[0]
-                        raw_detail = latest_injury.get('injuryDescription', latest_injury.get('injuryType', status_desc))
-                        injury_detail = translate_injury(raw_detail)
-                    else:
-                        injury_detail = translate_injury(status_desc)
+                    if any(x in status_desc for x in ['IL', 'Out', 'Day-to-Day', '7-day', '10-day', '15-day', '60-day', 'Injured']):
+                        pid = p['person']['id']
+                        name = p['person']['fullName']
+                        pos = p['position']['abbreviation']
                         
-                    level = "大聯盟 (MLB)" if t_id == team_id else "小聯盟 (MiLB)"
-                    
-                    il_data.append({
-                        '球員 (Player)': name,
-                        '所屬層級 (Level)': level,
-                        '守位 (Pos)': pos,
-                        '名單狀態 (Status)': status_desc,
-                        '傷勢部位/原因 (Injury)': injury_detail,
-                        '_is_mlb': 0 if t_id == team_id else 1
-                    })
-        except Exception as e: 
-            continue
-            
-    df = pd.DataFrame(il_data)
+                        injuries = p['person'].get('injuries', [])
+                        note = p.get('note', '')
+                        
+                        raw_detail = ""
+                        # 1. 抓官方病歷
+                        if injuries:
+                            latest_injury = injuries[0]
+                            raw_detail = latest_injury.get('injuryDescription', latest_injury.get('injuryType', ''))
+                        
+                        # 2. 抓官方備註
+                        if not raw_detail and note:
+                            raw_detail = note
+                            
+                        # 3. 如果都沒有，就給狀態描述
+                        if not raw_detail:
+                            raw_detail = status_desc
+                            
+                        injury_detail = translate_injury(raw_detail)
+                        
+                        level = "大聯盟 (MLB)" if t_id == team_id else "小聯盟 (MiLB)"
+                        
+                        # 如果已經存過這個人，而且舊的紀錄已經有詳細傷勢，就不覆蓋（避免被空資料洗掉）
+                        if pid in il_players and il_players[pid]['傷勢部位/原因 (Injury)'] != "未公開詳細傷勢" and injury_detail == "未公開詳細傷勢":
+                            continue
+                            
+                        il_players[pid] = {
+                            '球員 (Player)': name,
+                            '所屬層級 (Level)': level,
+                            '守位 (Pos)': pos,
+                            '名單狀態 (Status)': status_desc,
+                            '傷勢部位/原因 (Injury)': injury_detail,
+                            '_is_mlb': 0 if t_id == team_id else 1  # 輔助排序欄位
+                        }
+            except Exception as e: 
+                continue
+                
+    df = pd.DataFrame(list(il_players.values()))
     if not df.empty:
-        df = df.drop_duplicates(subset=['球員 (Player)']).sort_values(by=['_is_mlb', '名單狀態 (Status)']).drop(columns=['_is_mlb']).reset_index(drop=True)
+        # 排序：大聯盟優先，接著按名單狀態排列
+        df = df.sort_values(by=['_is_mlb', '名單狀態 (Status)']).drop(columns=['_is_mlb']).reset_index(drop=True)
     return df
 
 @st.cache_data(ttl=3600*12)
@@ -842,13 +864,12 @@ def fetch_team_recent_form(team_id, target_date_str):
         return games[-5:] 
     except: return []
 
-# 🔥 抓取全聯盟大範圍近況並全數抓取，完全依靠拉條動態過濾
+# 🔥 抓取全聯盟大範圍近況並允許動態過濾
 @st.cache_data(ttl=3600*3)
 def fetch_recent_form_ranking(p_type):
     group = 'hitting' if p_type == '打者' else 'pitching'
     tw_now = datetime.now(timezone(timedelta(hours=8)))
     
-    # 🎯 大聯盟例行賽通常在 9 月底結束，如果在 10 月~3 月查詢，必須將時間回溯至 9 月底！
     if tw_now.month < 4:
         end_dt = datetime(tw_now.year - 1, 9, 30)
     elif tw_now.month >= 10:
@@ -1057,7 +1078,7 @@ def fetch_milb_stats(year, sid, p_type):
     except: return pd.DataFrame()
 
 # 🌐 全域安全獲取 Metrics
-exclude_cols = ['Player', 'Player_ID', 'Team', 'Position', 'PA', 'AB', 'R', 'ER', 'PC', 'IP', 'H', 'HR', 'SB', 'Diff']
+exclude_cols = ['Player', 'Player_ID', 'Team', 'Position', 'PA', 'AB', 'R', 'ER', 'PC', 'IP', 'H', 'HR', 'SB', 'Diff', 'IP_calc']
 
 # --- 4. 側欄功能區 ---
 with st.sidebar:
@@ -1352,7 +1373,7 @@ if not full_data.empty:
                 
         st.markdown("---")
         st.markdown("### 🏥 目前球隊傷兵名單 (Injured List)")
-        with st.spinner("掃描球隊醫療與傷兵報告中..."):
+        with st.spinner("掃描全組織醫療與傷兵報告中 (包含小聯盟)..."):
             il_df = fetch_team_injury_list(MLB_TEAM_IDS.get(theme_team))
             if not il_df.empty:
                 def style_il_row(row):
@@ -1360,7 +1381,7 @@ if not full_data.empty:
                 styled_il = il_df.style.apply(style_il_row, axis=1).hide(axis='index')
                 st.markdown(f"<div class='table-scroll-container' style='max-height: 400px;'>{styled_il.to_html()}</div>", unsafe_allow_html=True)
             else:
-                st.success(f"✅ {theme_team} 目前非常健康，查無重大傷兵！(註：若查無重傷兵代表現役名單內全員健康)")
+                st.success(f"✅ {theme_team} 目前非常健康，查無重大傷兵！")
 
     else:
         # ==========================================
@@ -1406,11 +1427,11 @@ if not full_data.empty:
             # --- 新增拉條以動態調整局數/打席 ---
             col_filt1, col_filt2 = st.columns([1, 2])
             if p_type == '打者':
-                recent_min_filter = col_filt1.slider("設定近況最少打席 (PA) 門檻", min_value=1, max_value=50, value=20, step=1)
+                recent_min_filter = col_filt1.slider("設定近況最少打席 (PA) 門檻", min_value=1, max_value=50, value=25, step=1)
                 col_filt2.caption(f"<br>以大數據掃描近期 14 天賽事，當前篩選門檻：至少 **{recent_min_filter}** 打席。", unsafe_allow_html=True)
             else:
-                recent_min_filter = col_filt1.slider("設定近況最少投球局數 (IP) 門檻", min_value=1.0, max_value=30.0, value=2.0, step=0.5)
-                col_filt2.caption(f"<br>以大數據掃描近期 14 天賽事，當前篩選門檻：至少 **{recent_min_filter}** 局。(若要看 RP/CL 建議調低至 1.5~3 局)", unsafe_allow_html=True)
+                recent_min_filter = col_filt1.slider("設定近況最少投球局數 (IP) 門檻", min_value=1.0, max_value=30.0, value=3.0, step=0.5)
+                col_filt2.caption(f"<br>以大數據掃描近期 14 天賽事，當前篩選門檻：至少 **{recent_min_filter}** 局。(若要看 RP/CL 建議調低至 2~5 局)", unsafe_allow_html=True)
                 
             with st.spinner("全網大範圍撈取最新戰報中..."):
                 recent_df = fetch_recent_form_ranking(p_type)
@@ -1424,9 +1445,7 @@ if not full_data.empty:
                         
                 if not recent_df.empty:
                     pos_map = full_data.set_index('Player')['Position'].to_dict()
-                    # 安全填補並消滅 Unknown
-                    recent_df['Position'] = recent_df['Player'].map(pos_map).fillna(recent_df['Position'])
-                    recent_df['Position'] = recent_df['Position'].replace(['Unknown', ''], 'DH/PH')
+                    recent_df['Position'] = recent_df['Player'].map(pos_map).fillna(recent_df['Position']).replace('Unknown', 'DH/PH')
                     
                     # Ensure Position is 3rd column
                     cols = list(recent_df.columns)
@@ -1606,8 +1625,11 @@ if not full_data.empty:
                     home_rp = pred_pitchers[(pred_pitchers['Team'] == home_t) & (pred_pitchers['Position'].isin(['RP', 'CL']))]
                     away_rp = pred_pitchers[(pred_pitchers['Team'] == away_t) & (pred_pitchers['Position'].isin(['RP', 'CL']))]
                     
-                    home_bp_era = home_rp['ERA'].mean() if not home_rp.empty else 4.0
-                    away_bp_era = away_rp['ERA'].mean() if not away_rp.empty else 4.0
+                    home_bp_era = home_rp['ERA'].replace(0, pd.NA).mean() if not home_rp.empty else pd.NA
+                    home_bp_era = float(home_bp_era) if pd.notna(home_bp_era) else 4.00
+                    
+                    away_bp_era = away_rp['ERA'].replace(0, pd.NA).mean() if not away_rp.empty else pd.NA
+                    away_bp_era = float(away_bp_era) if pd.notna(away_bp_era) else 4.00
                     
                     home_bp_pitches = fetch_bullpen_usage(home_t, target_date.strftime("%Y-%m-%d"))
                     away_bp_pitches = fetch_bullpen_usage(away_t, target_date.strftime("%Y-%m-%d"))
@@ -1624,8 +1646,12 @@ if not full_data.empty:
                     home_ops = hh_stats['OPS'].mean() if not hh_stats.empty else 0.700
                     away_p_war = ap_stats['WAR'].sum() if not ap_stats.empty else 0.0
                     home_p_war = hp_stats['WAR'].sum() if not hp_stats.empty else 0.0
-                    away_p_era = ap_stats['ERA'].mean() if not ap_stats.empty else 4.00
-                    home_p_era = hp_stats['ERA'].mean() if not hp_stats.empty else 4.00
+                    
+                    away_p_era = ap_stats['ERA'].replace(0, pd.NA).mean() if not ap_stats.empty else pd.NA
+                    away_p_era = float(away_p_era) if pd.notna(away_p_era) else 4.00
+                    
+                    home_p_era = hp_stats['ERA'].replace(0, pd.NA).mean() if not hp_stats.empty else pd.NA
+                    home_p_era = float(home_p_era) if pd.notna(home_p_era) else 4.00
                     
                     away_lineup_score = away_ops * 100
                     away_sp_score = max(0, 5 - away_p_era) * 10 + away_p_war * 5
@@ -1695,7 +1721,6 @@ if not full_data.empty:
                     st.markdown(f"<div style='font-size:{f_size(st.session_state.font_size, 1.2)}; font-weight:bold; margin-bottom: 10px;'>⚖️ 核心戰力對比拔河 (Comparison)</div>", unsafe_allow_html=True)
                     st.markdown(draw_comparison_bar(f"先發投手 ERA ({METRIC_TW.get('ERA')})", away_p_era, home_p_era, away_t_color, home_t_color), unsafe_allow_html=True)
                     st.markdown(draw_comparison_bar(f"打線整體 OPS ({METRIC_TW.get('OPS')})", away_ops, home_ops, away_t_color, home_t_color), unsafe_allow_html=True)
-                    st.markdown(draw_comparison_bar(f"牛棚團隊 ERA ({METRIC_TW.get('ERA')})", away_bp_era, home_bp_era, away_t_color, home_t_color), unsafe_allow_html=True)
                     st.markdown(draw_comparison_bar("近兩日牛棚消耗球數 (疲勞度)", away_bp_pitches, home_bp_pitches, away_t_color, home_t_color, is_int=True), unsafe_allow_html=True)
                     
                     reasoning = []
@@ -1709,7 +1734,7 @@ if not full_data.empty:
                     else:
                         reasoning.append(f"🏏 **打線破壞力**：客隊打線整體 OPS ({away_ops:.3f}) 領先主隊 ({home_ops:.3f})，具備較佳的得分期望值。")
 
-                    reasoning.append(f"🛡️ **牛棚戰力與疲勞度**：主隊牛棚 ERA {home_bp_era:.2f} (近兩日消耗 {home_bp_pitches} 球) vs 客隊牛棚 ERA {away_bp_era:.2f} (近兩日消耗 {away_bp_pitches} 球)。")
+                    reasoning.append(f"🛡️ **牛棚戰力與疲勞度**：主隊牛棚近兩日消耗 {home_bp_pitches} 球 vs 客隊牛棚近兩日消耗 {away_bp_pitches} 球。")
                     if home_bp_pitches > 80:
                         reasoning.append(f"⚠️ <span style='color:#FF4444;'>**疲勞警告**</span>：主隊 {home_t} 牛棚近期消耗巨大，可能影響比賽後半段壓制力！")
                     if away_bp_pitches > 80:
@@ -1823,4 +1848,4 @@ if not full_data.empty:
                     milb_style = milb_df.style.format(STYLER_FORMATS).background_gradient(subset=[sel_sort], cmap=cmap)
                     st.markdown(f"<div class='table-scroll-container'>{milb_style.to_html()}</div>", unsafe_allow_html=True)
                 else:
-                    st.warning(f"⚠️ 目前查無 {year} 賽季 {milb_level} 的 {p_type} 數據。\n\n可能原因：小聯盟賽季尚未開始（通常為 4 月初），或該層級暫無符合篩選條件的球員。")
+                    st.warning(f"⚠️ 目前查無 {year} 賽季 {milb_level} 的 {p_type} 數據。\n\n可能原因：小聯盟賽季尚未開始（通常為 4 月初），或該層級暫無符合篩選條件的球員。") 
