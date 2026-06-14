@@ -55,6 +55,60 @@ METRIC_TW = {
     'FIP': '進階獨立防禦率', 'BA': '被打擊率', 'Diff': '實際預期落差'
 }
 
+# 🇹🇼 傷勢翻譯字典與函數
+INJURY_DICT = {
+    "shoulder": "肩膀", "elbow": "手肘", "forearm": "前臂", "wrist": "手腕", "hand": "手部", 
+    "finger": "手指", "thumb": "拇指", "lower back": "下背部", "back": "背部", "neck": "頸部", 
+    "oblique": "腹斜肌", "rib": "肋骨", "hip": "髖部", "groin": "腹股溝", 
+    "quad": "大腿前側", "hamstring": "大腿後側", "knee": "膝蓋", "calf": "小腿", 
+    "ankle": "腳踝", "foot": "腳部", "toe": "腳趾", "achilles": "阿基里斯腱",
+    "biceps": "二頭肌", "triceps": "三頭肌", "lat": "背闊肌", "pectoral": "胸肌",
+    "flexor": "屈肌", "tendon": "肌腱", "ligament": "韌帶", "meniscus": "半月板",
+    "ucl": "尺骨附屬韌帶", "acl": "前十字韌帶", "mcl": "內側副韌帶", "labrum": "關節唇",
+    "strain": "拉傷", "sprain": "扭傷", "fracture": "骨折", "contusion": "挫傷", 
+    "inflammation": "發炎", "soreness": "痠痛", "sore": "痠痛", "tightness": "緊繃", 
+    "fatigue": "疲勞", "blister": "水泡", "concussion": "腦震盪", "surgery": "手術",
+    "impingement": "夾擠症", "dislocation": "脫臼", "tear": "撕裂", "bone bruise": "骨挫傷",
+    "illness": "生病", "covid": "新冠肺炎", "viral": "病毒感染"
+}
+
+def translate_injury(text):
+    if not text:
+        return "未公開詳細傷勢"
+        
+    lower_text = text.lower().strip()
+    
+    # 如果大聯盟API沒給詳細病歷，只給了通用狀態，直接乾淨顯示「未公開詳細傷勢」
+    invalid_texts = ['il', 'out', 'day-to-day', '7-day il', '10-day il', '15-day il', '60-day il', 'unknown', 'injured 7-day', 'injured 10-day', 'injured 15-day', 'injured 60-day']
+    if lower_text in invalid_texts:
+        return "未公開詳細傷勢"
+    
+    tw_parts = []
+    
+    if "tommy john" in lower_text:
+        tw_parts.append("手肘韌帶置換手術")
+    else:
+        if "left" in lower_text: tw_parts.append("左")
+        elif "right" in lower_text: tw_parts.append("右")
+        
+        body_parts = ["shoulder", "elbow", "forearm", "wrist", "hand", "finger", "thumb", "lower back", "back", "neck", "oblique", "rib", "hip", "groin", "quad", "hamstring", "knee", "calf", "ankle", "foot", "toe", "achilles", "biceps", "triceps", "lat", "pectoral", "flexor", "tendon", "ligament", "meniscus", "ucl", "acl", "mcl", "labrum"]
+        for bp in body_parts:
+            if bp in lower_text:
+                tw_parts.append(INJURY_DICT[bp])
+                break
+                
+        conditions = ["strain", "sprain", "fracture", "contusion", "inflammation", "soreness", "sore", "tightness", "fatigue", "blister", "concussion", "surgery", "impingement", "dislocation", "tear", "bone bruise", "illness", "covid", "viral"]
+        for cond in conditions:
+            if cond in lower_text:
+                tw_parts.append(INJURY_DICT[cond])
+                break
+                
+    if tw_parts:
+        tw_meaning = "".join(tw_parts)
+        return f"{text} ({tw_meaning})"
+    
+    return text
+
 # 🔢 全局智慧小數點格式引擎
 METRIC_FORMATS = {
     'PA': '{:.0f}', 'AB': '{:.0f}', 'R': '{:.0f}', 'H': '{:.0f}', 'RBI': '{:.0f}', 
@@ -119,6 +173,18 @@ def get_team_color(team_name, default_colors=("#EF3E42", "#1E90FF")):
         colors = ("#003831", "#EFB21E")
     if not colors: colors = default_colors
     return colors
+
+def darken_color(hex_color, factor=0.7):
+    if not hex_color or not isinstance(hex_color, str) or len(hex_color) < 7: return "#000000"
+    hex_color = hex_color.lstrip('#')
+    try:
+        r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        r = max(0, int(r * factor))
+        g = max(0, int(g * factor))
+        b = max(0, int(b * factor))
+        return f"#{r:02x}{g:02x}{b:02x}"
+    except:
+        return "#000000"
 
 def get_team_logo_url(team_name):
     if not team_name: return ""
@@ -324,7 +390,7 @@ def fetch_historical_positions():
 @st.cache_data(ttl=3600)
 def process_combined_data(p_type, year, min_filter):
     group = 'pitching' if p_type == '投手' else 'hitting'
-    url = f"https://statsapi.mlb.com/api/v1/stats?stats=season&group={group}&season={year}&playerPool=ALL&limit=2000&hydrate=person"
+    url = f"https://statsapi.mlb.com/api/v1/stats?stats=season&group={group}&season={year}&sportId=1&limit=2000&hydrate=person"
     try:
         splits = requests.get(url, timeout=15).json().get('stats', [{}])[0].get('splits', [])
         mlb_df = pd.DataFrame([s.get('stat', {}) for s in splits])
@@ -475,6 +541,65 @@ def fetch_all_teams_stats(year):
         return pd.merge(df_hit, df_pit, on='Team')
     except:
         return pd.DataFrame()
+
+# 🏥 完美解析傷病報告 API：雙重雙向掃描(確保病歷)、無日期版
+@st.cache_data(ttl=3600*12)
+def fetch_team_injury_list(team_id):
+    tw_now = datetime.now(timezone(timedelta(hours=8)))
+    year = tw_now.year
+    
+    # 🎯 雙管齊下：同時抓 40人名單(保證病歷齊全) + 整季名單(保證不漏掉 60天 IL)
+    urls = [
+        f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster/40Man?hydrate=person(injuries)",
+        f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster?rosterType=fullRoster&season={year}&hydrate=person(injuries)"
+    ]
+    
+    il_players = {}
+    
+    for url in urls:
+        try:
+            res = requests.get(url, timeout=10).json()
+            for p in res.get('roster', []):
+                status_desc = p.get('status', {}).get('description', 'Unknown')
+                
+                if any(x in status_desc for x in ['IL', 'Out', 'Day-to-Day', '7-day', '10-day', '15-day', '60-day', 'Injured']):
+                    pid = p['person']['id']
+                    name = p['person']['fullName']
+                    pos = p['position']['abbreviation']
+                    
+                    injuries = p['person'].get('injuries', [])
+                    note = p.get('note', '')
+                    
+                    raw_detail = ""
+                    if injuries:
+                        latest_injury = injuries[0]
+                        raw_detail = latest_injury.get('injuryDescription', latest_injury.get('injuryType', ''))
+                    
+                    if not raw_detail and note:
+                        raw_detail = note
+                        
+                    if not raw_detail:
+                        raw_detail = status_desc
+                        
+                    injury_detail = translate_injury(raw_detail)
+                    
+                    # 如果該球員已經被抓過，而且已經有正確病歷，就不去覆蓋他
+                    if pid in il_players and il_players[pid]['傷勢部位/原因 (Injury)'] != "未公開詳細傷勢":
+                        continue
+                        
+                    il_players[pid] = {
+                        '球員 (Player)': name,
+                        '守位 (Pos)': pos,
+                        '名單狀態 (Status)': status_desc,
+                        '傷勢部位/原因 (Injury)': injury_detail
+                    }
+        except Exception as e: 
+            continue
+            
+    df = pd.DataFrame(list(il_players.values()))
+    if not df.empty:
+        df = df.sort_values(by='名單狀態 (Status)').reset_index(drop=True)
+    return df
 
 @st.cache_data(ttl=3600*12)
 def fetch_team_roster(team_id, year):
@@ -720,7 +845,7 @@ def fetch_team_recent_form(team_id, target_date_str):
         return games[-5:] 
     except: return []
 
-# 🔥 抓取全聯盟大範圍近況並嚴格篩選 (打者>=25PA，SP>=20IP，RP/CL>=8IP)
+# 🔥 抓取全聯盟大範圍近況並嚴格篩選
 @st.cache_data(ttl=3600*3)
 def fetch_recent_form_ranking(p_type):
     group = 'hitting' if p_type == '打者' else 'pitching'
@@ -733,12 +858,12 @@ def fetch_recent_form_ranking(p_type):
     else:
         end_dt = tw_now
         
-    days_back = 15 if p_type == '打者' else 30
+    days_back = 27
     start_dt = end_dt - timedelta(days=days_back)
     
-    url = f"https://statsapi.mlb.com/api/v1/stats?stats=byDateRange&group={group}&startDate={start_dt.strftime('%Y-%m-%d')}&endDate={end_dt.strftime('%Y-%m-%d')}&playerPool=ALL&limit=1500"
+    url = f"https://statsapi.mlb.com/api/v1/stats?stats=byDateRange&group={group}&startDate={start_dt.strftime('%Y-%m-%d')}&endDate={end_dt.strftime('%Y-%m-%d')}&sportId=1&gameType=R&limit=2000"
     try:
-        res = requests.get(url, timeout=10).json()
+        res = requests.get(url, timeout=25).json()
         splits = res.get('stats', [{}])[0].get('splits', [])
         data = []
         for s in splits:
@@ -762,14 +887,15 @@ def fetch_recent_form_ranking(p_type):
                 gp = stat.get('gamesPlayed', 0)
                 is_sp = gp > 0 and (gs > gp / 2)
                 
-                if (is_sp and ip_calc >= 20.0) or (not is_sp and ip_calc >= 8.0):
+                if (is_sp and ip_calc >= 30.0) or (not is_sp and ip_calc >= 10.0):
                     data.append({
                         'Player': player_name, 'Team': team_name, 'IP': safe_float(stat.get('inningsPitched', 0)),
                         'ERA': safe_float(stat.get('era', 0)), 'WHIP': safe_float(stat.get('whip', 0)),
                         'K': stat.get('strikeOuts', 0), 'BB': stat.get('baseOnBalls', 0), 'SV': stat.get('saves', 0)
                     })
         return pd.DataFrame(data)
-    except: return pd.DataFrame()
+    except Exception as e: 
+        return pd.DataFrame()
 
 @st.cache_data(ttl=3600*12)
 def fetch_player_home_away_splits(player_id, p_type, year):
@@ -1223,6 +1349,18 @@ if not full_data.empty:
                 st.markdown(f"<div class='table-scroll-container' style='max-height: 800px;'>{styled_roster.to_html()}</div>", unsafe_allow_html=True)
             else:
                 st.warning("⚠️ 無法載入球員名單。")
+                
+        st.markdown("---")
+        st.markdown("### 🏥 目前球隊傷兵名單 (Injured List)")
+        with st.spinner("掃描球隊醫療與傷兵報告中..."):
+            il_df = fetch_team_injury_list(MLB_TEAM_IDS.get(theme_team))
+            if not il_df.empty:
+                def style_il_row(row):
+                    return ['color: #D32F2F !important; font-weight: 900 !important;' if col == '名單狀態 (Status)' else f'color: {p_prof_color} !important; font-weight: 700 !important;' for col in row.index]
+                styled_il = il_df.style.apply(style_il_row, axis=1).hide(axis='index')
+                st.markdown(f"<div class='table-scroll-container' style='max-height: 400px;'>{styled_il.to_html()}</div>", unsafe_allow_html=True)
+            else:
+                st.success(f"✅ {theme_team} 目前非常健康，查無重大傷兵！(註：若查無重傷兵代表現役名單內全員健康)")
 
     else:
         # ==========================================
@@ -1264,7 +1402,7 @@ if not full_data.empty:
             
         with tab_recent:
             st.markdown(f"### 🔥 {p_type}近況火熱排行榜")
-            st.caption(f"以大數據掃描近期賽事（打者近15天、投手近30天），嚴格篩選出符合門檻（打者需滿 25 打席、先發需滿 20 局、後援需滿 8 局）的球員！")
+            st.caption(f"以大數據掃描近期賽事，嚴格篩選出符合門檻（打者需滿 25 打席、先發需滿 30 局、後援需滿 10 局）的球員！")
             with st.spinner("全網大範圍撈取最新戰報中..."):
                 recent_df = fetch_recent_form_ranking(p_type)
                 if not recent_df.empty:
@@ -1302,7 +1440,7 @@ if not full_data.empty:
                     styled_recent = recent_df.style.apply(style_recent_cols, axis=1).format(STYLER_FORMATS).background_gradient(subset=[sel_recent_m], cmap=cmap).hide(axis='index')
                     st.markdown(f"<div class='table-scroll-container'>{styled_recent.to_html()}</div>", unsafe_allow_html=True)
                 else:
-                    st.warning("⚠️ 目前抓取不到符合嚴格門檻的近況數據，可能為休賽季或尚未累積足夠場次。")
+                    st.warning("⚠️ 目前抓取不到符合嚴格門檻的近況數據，可能為休賽季或球季剛開打尚未累積足夠場次。")
 
         with tab_radar:
             st.markdown("### 🎯 選擇雷達圖比較目標")
