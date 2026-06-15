@@ -870,6 +870,7 @@ def fetch_recent_form_ranking(p_type):
     group = 'hitting' if p_type == '打者' else 'pitching'
     tw_now = datetime.now(timezone(timedelta(hours=8)))
     
+    # 🎯 大聯盟例行賽通常在 9 月底結束，如果在 10 月~3 月查詢，必須將時間回溯至 9 月底！
     if tw_now.month < 4:
         end_dt = datetime(tw_now.year - 1, 9, 30)
     elif tw_now.month >= 10:
@@ -1472,7 +1473,7 @@ if not full_data.empty:
                         asc_order = True if sel_recent_m in ['ERA', 'WHIP', 'BB'] else False
                     
                     if sel_recent_pos != "全部 (ALL)":
-                        recent_df = recent_df[recent_df['Position'].str.contains(sel_recent_pos, na=False)]
+                        recent_df = recent_df[recent_df['Position'].str.contains(rf'\b{sel_recent_pos}\b', na=False, regex=True)]
                     
                     if not recent_df.empty:
                         recent_df = recent_df.sort_values(by=sel_recent_m, ascending=asc_order).reset_index(drop=True)
@@ -1848,4 +1849,4 @@ if not full_data.empty:
                     milb_style = milb_df.style.format(STYLER_FORMATS).background_gradient(subset=[sel_sort], cmap=cmap)
                     st.markdown(f"<div class='table-scroll-container'>{milb_style.to_html()}</div>", unsafe_allow_html=True)
                 else:
-                    st.warning(f"⚠️ 目前查無 {year} 賽季 {milb_level} 的 {p_type} 數據。\n\n可能原因：小聯盟賽季尚未開始（通常為 4 月初），或該層級暫無符合篩選條件的球員。") 
+                    st.warning(f"⚠️ 目前查無 {year} 賽季 {milb_level} 的 {p_type} 數據。\n\n可能原因：小聯盟賽季尚未開始（通常為 4 月初），或該層級暫無符合篩選條件的球員。")
